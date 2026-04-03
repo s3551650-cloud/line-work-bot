@@ -157,6 +157,20 @@ def send_reminder(line_id, check_out_time, reminder_type, minutes):
     except Exception as e:
         logger.error(f"發送提醒失敗: {e}")
 
+def schedule_line_test_reminder(line_id, delay_seconds):
+    import threading
+    def send_later():
+        import time
+        time.sleep(delay_seconds)
+        test_time = get_taiwan_time()
+        message = f"測試提醒！\n\n時間：{test_time.strftime('%H:%M:%S')}"
+        line_bot_api.push_message(line_id, TextSendMessage(text=message))
+        logger.info(f"測試提醒已發送給 {line_id}")
+    
+    timer = threading.Timer(delay_seconds, send_later)
+    timer.start()
+    logger.info(f"測試提醒已排程，{delay_seconds}秒後發送")
+
 def get_taiwan_time():
     return datetime.utcnow() + timedelta(hours=8)
 
@@ -262,20 +276,11 @@ def handle_postback(event):
         test_check_in = get_taiwan_time()
         test_check_out = test_check_in + timedelta(seconds=10)
         
-        from apscheduler.triggers.date import DateTrigger
-        
-        job_id = f"test_{line_id}"
-        scheduler.add_job(
-            send_reminder,
-            trigger=DateTrigger(run_date=test_check_out),
-            args=[line_id, test_check_out, "測試下班", 0],
-            id=job_id,
-            replace_existing=True
-        )
-        
         message = f"測試打卡成功！\n\n上班時間：{test_check_in.strftime('%H:%M:%S')}\n預定下班時間：{test_check_out.strftime('%H:%M:%S')}\n（10秒後收到提醒）"
         
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=message))
+        
+        schedule_line_test_reminder(line_id, 10)
     
     elif 'action=history' in data:
         records = get_user_history(line_id, 10)
