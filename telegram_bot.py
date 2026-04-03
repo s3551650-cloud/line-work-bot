@@ -36,14 +36,6 @@ def get_main_keyboard():
         ]
     }
 
-def get_test_keyboard():
-    return {
-        'inline_keyboard': [
-            [{'text': '✅ 確認測試', 'callback_data': 'do_test'}],
-            [{'text': '⬅️ 返回', 'callback_data': 'back'}],
-        ]
-    }
-
 def get_settings_keyboard():
     return {
         'inline_keyboard': [
@@ -274,10 +266,6 @@ def telegram_webhook():
             send_message(chat_id, message_text, get_main_keyboard())
         
         elif data_cb == 'test':
-            message_text = f"🧪 *測試功能*\n\n按下「測試打卡」後，10秒會收到下班提醒\n\n確定要測試嗎？"
-            send_message(chat_id, message_text, get_test_keyboard())
-        
-        elif data_cb == 'do_test':
             test_check_in = get_taiwan_time()
             test_check_out = test_check_in + timedelta(seconds=10)
             
