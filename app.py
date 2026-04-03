@@ -1,6 +1,5 @@
 import os
 import logging
-import json
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 from linebot import LineBotApi, WebhookHandler
@@ -26,7 +25,9 @@ line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 scheduler = BackgroundScheduler()
-scheduler.start()
+
+def get_taiwan_time():
+    return datetime.utcnow() + timedelta(hours=8)
 
 def supabase_request(table, method='GET', data=None, filters=None):
     url = f"{SUPABASE_URL}/rest/v1/{table}"
@@ -48,12 +49,11 @@ def supabase_request(table, method='GET', data=None, filters=None):
             response = requests.post(url, headers=headers, json=data)
         elif method == 'PATCH':
             response = requests.patch(url, headers=headers, json=data)
-            response = requests.patch(url, headers=headers, data=json.dumps(data))
         
         if response.status_code in [200, 201, 206]:
             return response.json()
         else:
-            logger.error(f"Supabase error: {response.status_code} - {response.text}")
+            logger.error(f"Supabase error: {response.status_code}")
             return None
     except Exception as e:
         logger.error(f"Supabase request error: {e}")
@@ -96,83 +96,111 @@ def record_check_in(line_id: str):
     if not user:
         return None
     
-    check_in = datetime.utcnow() + timedelta(hours=8)
+    check_in = get_taiwan_time()
     work_hours = user.get('work_hours', 8.5)
     scheduled_check_out = check_in + timedelta(hours=work_hours)
+    remind_enabled = user.get('remind_enabled', True)
+    remind_minutes = user.get('remind_minutes', 10)
+    
+    if remind_enabled:
+        early_remind_time = scheduled_check_out - timedelta(minutes=remind_minutes)
+    else:
+        early_remind_time = None
     
     record_data = {
         'user_id': user['id'],
+        'line_id': line_id,
         'check_in': check_in.isoformat(),
-        'scheduled_check_out': scheduled_check_out.isoformat()
+        'scheduled_check_out': scheduled_check_out.isoformat(),
+        'early_remind_time': early_remind_time.isoformat() if early_remind_time else None,
+        'early_remind_sent': False,
+        'main_remind_sent': False
     }
     
     record = supabase_request('work_records', method='POST', data=record_data)
     
-    schedule_reminders(user, check_in, scheduled_check_out)
-    
     return {
         'record': record[0] if record else None,
         'scheduled_check_out': scheduled_check_out,
-        'work_hours': work_hours
+        'work_hours': work_hours,
+        'remind_enabled': remind_enabled,
+        'remind_minutes': remind_minutes
     }
 
-def schedule_reminders(user, check_in, scheduled_check_out):
-    from apscheduler.triggers.date import DateTrigger
+def check_and_send_reminders():
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
     
-    line_id = user['line_id']
-    work_hours = user.get('work_hours', 8.5)
-    remind_enabled = user.get('remind_enabled', True)
-    remind_minutes = user.get('remind_minutes', 10)
+    now = get_taiwan_time()
     
-    job_id_prefix = f"{line_id}_{check_in.strftime('%Y%m%d%H%M%S')}"
+    records = supabase_request('work_records', 
+                              filters={'early_remind_sent': 'eq.false'})
     
-    if remind_enabled:
-        early_remind_time = scheduled_check_out - timedelta(minutes=remind_minutes)
-        if early_remind_time > get_taiwan_time():
-            scheduler.add_job(
-                send_reminder,
-                trigger=DateTrigger(run_date=early_remind_time),
-                args=[line_id, early_remind_time, "提前提醒", remind_minutes],
-                id=f"{job_id_prefix}_early",
-                replace_existing=True
-            )
+    for record in records or []:
+        line_id = record.get('line_id')
+        early_remind_time_str = record.get('early_remind_time')
+        scheduled_check_out_str = record.get('scheduled_check_out')
+        early_remind_sent = record.get('early_remind_sent', False)
+        main_remind_sent = record.get('main_remind_sent', False)
+        
+        if not line_id:
+            continue
+        
+        if early_remind_time_str and not early_remind_sent:
+            try:
+                early_remind_time = datetime.fromisoformat(early_remind_time_str.replace('Z', '+00:00'))
+            except:
+                early_remind_time = None
+            
+            if early_remind_time and now >= early_remind_time:
+                user = get_or_create_user(line_id)
+                remind_min = 10
+                if user:
+                    remind_min = user.get('remind_minutes', 10)
+                
+                message = f"提前 {remind_min} 分鐘提醒：\n您的下班時間快到了！"
+                try:
+                    line_bot_api.push_message(line_id, TextSendMessage(text=message))
+                    
+                    supabase_request('work_records', method='PATCH',
+                                  data={'early_remind_sent': True},
+                                  filters={'id': f"eq.{record.get('id')}"})
+                    
+                    logger.info(f"已發送提前提醒給 {line_id}")
+                except Exception as e:
+                    logger.error(f"發送提前提醒失敗: {e}")
+        
+        if scheduled_check_out_str and not main_remind_sent:
+            try:
+                scheduled_check_out = datetime.fromisoformat(scheduled_check_out_str.replace('Z', '+00:00'))
+            except:
+                scheduled_check_out = None
+            
+            if scheduled_check_out and now >= scheduled_check_out:
+                message = f"下班時間到了！\n辛苦您了，可以下班了！"
+                try:
+                    line_bot_api.push_message(line_id, TextSendMessage(text=message))
+                    
+                    supabase_request('work_records', method='PATCH',
+                                  data={'main_remind_sent': True},
+                                  filters={'id': f"eq.{record.get('id')}"})
+                    
+                    logger.info(f"已發送下班提醒給 {line_id}")
+                except Exception as e:
+                    logger.error(f"發送下班提醒失敗: {e}")
+
+def start_scheduler():
+    if not scheduler.running:
+        scheduler.start()
     
     scheduler.add_job(
-        send_reminder,
-        trigger=DateTrigger(run_date=scheduled_check_out),
-        args=[line_id, scheduled_check_out, "下班時間", 0],
-        id=f"{job_id_prefix}_main",
+        check_and_send_reminders,
+        'interval',
+        minutes=1,
+        id='check_reminders',
         replace_existing=True
     )
-
-def send_reminder(line_id, check_out_time, reminder_type, minutes):
-    try:
-        if minutes > 0:
-            message = f"提前 {minutes} 分鐘提醒：\n您的下班時間快到了！\n預定下班時間：{check_out_time.strftime('%H:%M')}"
-        else:
-            message = f"下班時間到了！\n辛苦您了，可以下班了！\n下班時間：{check_out_time.strftime('%H:%M')}"
-        
-        line_bot_api.push_message(line_id, TextSendMessage(text=message))
-        logger.info(f"已發送提醒給 {line_id}: {reminder_type}")
-    except Exception as e:
-        logger.error(f"發送提醒失敗: {e}")
-
-def schedule_line_test_reminder(line_id, delay_seconds):
-    import threading
-    def send_later():
-        import time
-        time.sleep(delay_seconds)
-        test_time = get_taiwan_time()
-        message = f"測試提醒！\n\n時間：{test_time.strftime('%H:%M:%S')}"
-        line_bot_api.push_message(line_id, TextSendMessage(text=message))
-        logger.info(f"測試提醒已發送給 {line_id}")
-    
-    timer = threading.Timer(delay_seconds, send_later)
-    timer.start()
-    logger.info(f"測試提醒已排程，{delay_seconds}秒後發送")
-
-def get_taiwan_time():
-    return datetime.utcnow() + timedelta(hours=8)
+    logger.info("LINE Bot 排程檢查提醒已啟動")
 
 def get_user_history(line_id: str, limit: int = 10):
     if not SUPABASE_URL or not SUPABASE_KEY:
@@ -183,7 +211,7 @@ def get_user_history(line_id: str, limit: int = 10):
         return []
     
     records = supabase_request('work_records', 
-                             filters={'user_id': f"eq.{user['id']}", 'select': '*'})
+                             filters={'user_id': f"eq.{user['id']}"})
     if records:
         records = sorted(records, key=lambda x: x.get('check_in', ''), reverse=True)[:limit]
     return records or []
@@ -197,7 +225,6 @@ def format_history_message(records):
     for i, record in enumerate(records, 1):
         check_in = record.get('check_in', '')
         scheduled = record.get('scheduled_check_out')
-        actual = record.get('actual_check_out')
         
         if isinstance(check_in, str):
             try:
@@ -211,31 +238,26 @@ def format_history_message(records):
             except:
                 pass
         
-        if isinstance(actual, str):
-            try:
-                actual = datetime.fromisoformat(actual.replace('Z', '+00:00'))
-            except:
-                pass
-        
         date_str = check_in.strftime('%Y/%m/%d') if isinstance(check_in, datetime) else 'N/A'
         time_str = check_in.strftime('%H:%M') if isinstance(check_in, datetime) else 'N/A'
         
         if scheduled:
             scheduled_str = scheduled.strftime('%H:%M') if isinstance(scheduled, datetime) else 'N/A'
-            message += f"{i}. {date_str} 上班 {time_str} -> 預定下班 {scheduled_str}"
-            if actual:
-                actual_str = actual.strftime('%H:%M') if isinstance(actual, datetime) else 'N/A'
-                message += f" -> 實際下班 {actual_str}"
+            message += f"{i}. {date_str} 上班 {time_str} -> 下班 {scheduled_str}\n"
         else:
-            message += f"{i}. {date_str} 上班 {time_str}"
-        
-        message += "\n"
+            message += f"{i}. {date_str} 上班 {time_str}\n"
     
     return message
 
 @app.route("/health")
 def health():
+    check_and_send_reminders()
     return jsonify({'status': 'ok', 'time': get_taiwan_time().isoformat()})
+
+@app.route("/check")
+def check_reminders():
+    check_and_send_reminders()
+    return jsonify({'status': 'ok', 'checked': True})
 
 @app.route("/")
 def index():
@@ -261,30 +283,28 @@ def handle_postback(event):
     if 'action=check_in' in data:
         result = record_check_in(line_id)
         if result:
-            user = get_or_create_user(line_id)
             work_hours = result['work_hours']
             scheduled = result['scheduled_check_out']
             
             message = f"上班打卡成功！\n\n上班時間：{get_taiwan_time().strftime('%H:%M')}\n預定下班時間：{scheduled.strftime('%H:%M')}\n工作時長：{work_hours} 小時\n\n系統會在下班時間提醒您！"
             
-            if user and user.get('remind_enabled', True):
-                remind_min = user.get('remind_minutes', 10)
+            if result.get('remind_enabled'):
+                remind_min = result.get('remind_minutes', 10)
                 early_time = scheduled - timedelta(minutes=remind_min)
-                message += f"\n提前 {remind_min} 分鐘（{early_time.strftime('%H:%M')}）也會提醒您"
+                message += f"\n提前 {remind_min} 分鐘也會提醒您"
         else:
             message = "打卡失敗，請稍後再試"
         
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=message))
     
     elif 'action=test_check_in' in data:
-        test_check_in = get_taiwan_time()
-        test_check_out = test_check_in + timedelta(seconds=10)
-        
-        message = f"測試打卡成功！\n\n上班時間：{test_check_in.strftime('%H:%M:%S')}\n預定下班時間：{test_check_out.strftime('%H:%M:%S')}\n（10秒後收到提醒）"
+        result = record_check_in(line_id)
+        if result:
+            message = f"測試打卡成功！\n\n上班時間：{get_taiwan_time().strftime('%H:%M:%S')}\n預定下班時間：{result['scheduled_check_out'].strftime('%H:%M:%S')}\n（10秒後會收到提醒！）"
+        else:
+            message = "測試打卡失敗"
         
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=message))
-        
-        schedule_line_test_reminder(line_id, 10)
     
     elif 'action=history' in data:
         records = get_user_history(line_id, 10)
@@ -327,10 +347,10 @@ def handle_postback(event):
     elif 'action=set_hours' in data:
         buttons = ButtonsTemplate(
             actions=[
+                PostbackTemplateAction(label="7 小時", data="hours=7"),
                 PostbackTemplateAction(label="8 小時", data="hours=8"),
                 PostbackTemplateAction(label="8.5 小時", data="hours=8.5"),
-                PostbackTemplateAction(label="9 小時", data="hours=9"),
-                PostbackTemplateAction(label="自訂", data="hours=custom")
+                PostbackTemplateAction(label="9 小時", data="hours=9")
             ]
         )
         line_bot_api.reply_message(event.reply_token, TemplateSendMessage(alt_text="選擇時長", template=buttons))
@@ -355,13 +375,9 @@ def handle_postback(event):
         line_bot_api.reply_message(event.reply_token, TemplateSendMessage(alt_text="選擇分鐘", template=buttons))
     
     elif data.startswith('hours='):
-        hours_str = data.split('=')[1]
-        if hours_str == 'custom':
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請輸入您的工作時長（例如：8.5）"))
-        else:
-            hours = float(hours_str)
-            update_user_settings(line_id, work_hours=hours)
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"工作時長已設定為 {hours} 小時"))
+        hours = float(data.split('=')[1])
+        update_user_settings(line_id, work_hours=hours)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"工作時長已設定為 {hours} 小時"))
     
     elif data.startswith('remind_min='):
         minutes = int(data.split('=')[1])
@@ -385,16 +401,15 @@ def handle_message(event):
     if text in ['上班', '打卡', '開始上班']:
         result = record_check_in(line_id)
         if result:
-            user = get_or_create_user(line_id)
             work_hours = result['work_hours']
             scheduled = result['scheduled_check_out']
             
             message = f"上班打卡成功！\n\n上班時間：{get_taiwan_time().strftime('%H:%M')}\n預定下班時間：{scheduled.strftime('%H:%M')}\n工作時長：{work_hours} 小時\n\n系統會在下班時間提醒您！"
             
-            if user and user.get('remind_enabled', True):
-                remind_min = user.get('remind_minutes', 10)
+            if result.get('remind_enabled'):
+                remind_min = result.get('remind_minutes', 10)
                 early_time = scheduled - timedelta(minutes=remind_min)
-                message += f"\n提前 {remind_min} 分鐘（{early_time.strftime('%H:%M')}）也會提醒您"
+                message += f"\n提前 {remind_min} 分鐘也會提醒您"
         else:
             message = "打卡失敗，請稍後再試"
         
@@ -436,12 +451,14 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"提前提醒分鐘已設定為 {minutes} 分鐘"))
     
     elif text in ['功能', '幫助', 'help', '選單', 'menu']:
-        message = "使用說明：\n\n• 輸入「上班」或點擊上班按鈕打卡\n• 輸入「歷史」查看打卡記錄\n• 輸入「設定」調整選項\n• 點擊下方選單快速操作"
+        message = "使用說明：\n\n• 輸入「上班」打卡\n• 輸入「歷史」查看記錄\n• 輸入「設定」調整選項"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=message))
     
     else:
-        message = "您好！請使用以下指令：\n\n• 「上班」- 打卡\n• 「歷史」- 查看記錄\n• 「設定」- 調整選項\n• 「幫助」- 查看說明\n\n或點擊下方選單按鈕"
+        message = "您好！請使用以下指令：\n\n• 「上班」- 打卡\n• 「歷史」- 查看記錄\n• 「設定」- 調整選項"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=message))
+
+start_scheduler()
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
