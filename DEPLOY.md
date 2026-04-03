@@ -71,26 +71,12 @@ CREATE TABLE work_records (
     actual_check_out TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW()
 );
-
--- 啟用 RLS（資料列安全性）
-ALTER TABLE users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE work_records ENABLE ROW LEVEL SECURITY;
-
--- 設定 users 資料表權限
-CREATE POLICY "允許所有人讀取 users" ON users FOR SELECT USING (true);
-CREATE POLICY "允許所有人寫入 users" ON users FOR INSERT WITH CHECK (true);
-CREATE POLICY "允許所有人更新 users" ON users FOR UPDATE USING (true);
-
--- 設定 work_records 資料表權限
-CREATE POLICY "允許所有人讀取 work_records" ON work_records FOR SELECT USING (true);
-CREATE POLICY "允許所有人寫入 work_records" ON work_records FOR INSERT WITH CHECK (true);
 ```
 
 ### 4. 取得連線資訊
 1. 進入「Settings」→「API」
 2. 記下：
-   - **Project URL**（就是 SUPABASE_URL）
-   - **anon public** 金鑰（就是 SUPABASE_KEY）
+   - **Connection string**（點擊 "URI" 分頁，格式如 `postgresql://postgres:密碼@host:5432/postgres`）
 
 ---
 
@@ -120,8 +106,7 @@ CREATE POLICY "允許所有人寫入 work_records" ON work_records FOR INSERT WI
 |---------|-----|
 | `LINE_CHANNEL_SECRET` | 你的 Channel Secret |
 | `LINE_ACCESS_TOKEN` | 你的 Channel Access Token |
-| `SUPABASE_URL` | 你的 Supabase URL |
-| `SUPABASE_KEY` | 你的 Supabase anon 金鑰 |
+| `DATABASE_URL` | 你的 Supabase PostgreSQL 連線字串 |
 
 ### 5. 部署完成
 1. 等待部署完成（約 2-3 分鐘）
@@ -151,8 +136,7 @@ CREATE POLICY "允許所有人寫入 work_records" ON work_records FOR INSERT WI
 ```
 LINE_CHANNEL_SECRET=xxx
 LINE_ACCESS_TOKEN=xxx
-SUPABASE_URL=https://xxx.supabase.co
-SUPABASE_KEY=xxx
+DATABASE_URL=postgresql://postgres:密碼@host:5432/postgres
 ```
 
 ---
