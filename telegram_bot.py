@@ -21,11 +21,21 @@ def get_taiwan_time():
     return datetime.utcnow() + timedelta(hours=8)
 
 def send_message(chat_id, text, reply_markup=None):
+    if not TELEGRAM_BOT_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN not set")
+        return
+    
     url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
     data = {'chat_id': chat_id, 'text': text, 'parse_mode': 'Markdown'}
     if reply_markup:
         data['reply_markup'] = reply_markup
-    requests.post(url, json=data)
+    
+    try:
+        response = requests.post(url, json=data, timeout=10)
+        if response.status_code != 200:
+            logger.error(f"Telegram API error: {response.status_code} - {response.text}")
+    except Exception as e:
+        logger.error(f"Failed to send message: {e}")
 
 def get_main_keyboard():
     return {
@@ -229,6 +239,8 @@ def index():
 @app.route("/telegram/webhook", methods=['POST'])
 def telegram_webhook():
     data = request.get_json()
+    
+    logger.info(f"Received telegram update: {data}")
     
     if not data:
         return jsonify({'status': 'ok'})
