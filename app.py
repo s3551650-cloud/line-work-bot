@@ -97,7 +97,7 @@ def record_check_in(line_id: str):
     if not user:
         return None
     
-    check_in = datetime.now()
+    check_in = datetime.utcnow() + timedelta(hours=8)
     work_hours = user.get('work_hours', 8.5)
     scheduled_check_out = check_in + timedelta(hours=work_hours)
     
@@ -129,7 +129,7 @@ def schedule_reminders(user, check_in, scheduled_check_out):
     
     if remind_enabled:
         early_remind_time = scheduled_check_out - timedelta(minutes=remind_minutes)
-        if early_remind_time > datetime.now():
+        if early_remind_time > get_taiwan_time():
             scheduler.add_job(
                 send_reminder,
                 trigger=DateTrigger(run_date=early_remind_time),
@@ -157,6 +157,9 @@ def send_reminder(line_id, check_out_time, reminder_type, minutes):
         logger.info(f"已發送提醒給 {line_id}: {reminder_type}")
     except Exception as e:
         logger.error(f"發送提醒失敗: {e}")
+
+def get_taiwan_time():
+    return datetime.utcnow() + timedelta(hours=8)
 
 def get_user_history(line_id: str, limit: int = 10):
     if not SUPABASE_URL or not SUPABASE_KEY:
@@ -218,39 +221,41 @@ def format_history_message(records):
     return message
 
 def create_rich_menu():
-    rich_menu = RichMenu(
-        width=2500,
-        height=843,
-        selected=True,
-        name="上班打卡選單",
-        chat_bar_text="選單",
-        areas=[
-            RichMenuArea(
-                bounds=RichMenuBounds(x=0, y=0, width=833, height=843),
-                action=PostbackAction(
-                    label="上班",
-                    data="action=check_in",
-                    display_text="上班"
-                )
-            ),
-            RichMenuArea(
-                bounds=RichMenuBounds(x=833, y=0, width=833, height=843),
-                action=PostbackAction(
-                    label="歷史記錄",
-                    data="action=history",
-                    display_text="查詢歷史"
-                )
-            ),
-            RichMenuArea(
-                bounds=RichMenuBounds(x=1666, y=0, width=834, height=843),
-                action=PostbackAction(
-                    label="設定",
-                    data="action=settings",
-                    display_text="設定"
-                )
-            )
+    rich_menu = {
+        "size": {"width": 2500, "height": 843},
+        "selected": True,
+        "name": "上班打卡選單",
+        "chatBarText": "選單",
+        "areas": [
+            {
+                "bounds": {"x": 0, "y": 0, "width": 833, "height": 843},
+                "action": {
+                    "type": "postback",
+                    "label": "上班",
+                    "data": "action=check_in",
+                    "displayText": "上班"
+                }
+            },
+            {
+                "bounds": {"x": 833, "y": 0, "width": 833, "height": 843},
+                "action": {
+                    "type": "postback",
+                    "label": "歷史記錄",
+                    "data": "action=history",
+                    "displayText": "查詢歷史"
+                }
+            },
+            {
+                "bounds": {"x": 1666, "y": 0, "width": 834, "height": 843},
+                "action": {
+                    "type": "postback",
+                    "label": "設定",
+                    "data": "action=settings",
+                    "displayText": "設定"
+                }
+            }
         ]
-    )
+    }
     return rich_menu
 
 @app.route("/")
@@ -281,7 +286,7 @@ def handle_postback(event):
             work_hours = result['work_hours']
             scheduled = result['scheduled_check_out']
             
-            message = f"上班打卡成功！\n\n上班時間：{datetime.now().strftime('%H:%M')}\n預定下班時間：{scheduled.strftime('%H:%M')}\n工作時長：{work_hours} 小時\n\n系統會在下班時間提醒您！"
+            message = f"上班打卡成功！\n\n上班時間：{get_taiwan_time().strftime('%H:%M')}\n預定下班時間：{scheduled.strftime('%H:%M')}\n工作時長：{work_hours} 小時\n\n系統會在下班時間提醒您！"
             
             if user and user.get('remind_enabled', True):
                 remind_min = user.get('remind_minutes', 10)
@@ -395,7 +400,7 @@ def handle_message(event):
             work_hours = result['work_hours']
             scheduled = result['scheduled_check_out']
             
-            message = f"上班打卡成功！\n\n上班時間：{datetime.now().strftime('%H:%M')}\n預定下班時間：{scheduled.strftime('%H:%M')}\n工作時長：{work_hours} 小時\n\n系統會在下班時間提醒您！"
+            message = f"上班打卡成功！\n\n上班時間：{get_taiwan_time().strftime('%H:%M')}\n預定下班時間：{scheduled.strftime('%H:%M')}\n工作時長：{work_hours} 小時\n\n系統會在下班時間提醒您！"
             
             if user and user.get('remind_enabled', True):
                 remind_min = user.get('remind_minutes', 10)
@@ -453,9 +458,34 @@ def handle_message(event):
 def setup_richmenu():
     try:
         rich_menu = create_rich_menu()
-        rich_menu_id = line_bot_api.create_rich_menu(rich_menu)
         
-        return jsonify({'status': 'ok', 'rich_menu_id': rich_menu_id})
+        url = f'https://api.line.me/v2/bot/richmenu'
+        headers = {
+            'Authorization': f'Bearer {LINE_CHANNEL_ACCESS_TOKEN}',
+            'Content-Type': 'application/json'
+        }
+        
+        import requests as req
+        response = req.post(url, headers=headers, json=rich_menu)
+        result = response.json()
+        
+        if response.status_code == 200:
+            rich_menu_id = result.get('richMenuId')
+            
+            image_url = f'https://api.line.me/v2/bot/richmenu/{rich_menu_id}/content'
+            blank_image = bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x09, 0xC4, 0x00, 0x00, 0x03, 0x4B, 0x08, 0x06, 0x00, 0x00, 0x00, 0xD4, 0x00, 0x6C, 0x00, 0x00, 0x00, 0x01, 0x73, 0x52, 0x47, 0x42, 0x00, 0xAE, 0xCE, 0x1C, 0xE9, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0x60, 0x60, 0x60, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01, 0x27, 0x2C, 0xED, 0xA3, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82])
+            
+            img_response = req.post(image_url, headers={**headers, 'Content-Type': 'image/png'}, data=blank_image)
+            
+            if img_response.status_code == 200:
+                link_url = f'https://api.line.me/v2/bot/user/all/richmenu/{rich_menu_id}'
+                link_response = req.post(link_url, headers=headers)
+                
+                return jsonify({'status': 'ok', 'rich_menu_id': rich_menu_id, 'message': 'Rich menu created and set as default'})
+            else:
+                return jsonify({'status': 'ok', 'rich_menu_id': rich_menu_id, 'note': 'Image not set'})
+        else:
+            return jsonify({'status': 'error', 'message': result}), 400
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
