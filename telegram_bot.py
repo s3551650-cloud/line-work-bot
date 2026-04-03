@@ -15,7 +15,6 @@ SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '')
 
 scheduler = BackgroundScheduler()
-scheduler.start()
 
 def get_taiwan_time():
     return datetime.utcnow() + timedelta(hours=8)
@@ -33,29 +32,9 @@ def send_message(chat_id, text, reply_markup=None):
     try:
         response = requests.post(url, json=data, timeout=10)
         if response.status_code != 200:
-            logger.error(f"Telegram API error: {response.status_code} - {response.text}")
+            logger.error(f"Telegram API error: {response.status_code}")
     except Exception as e:
         logger.error(f"Failed to send message: {e}")
-
-def get_main_keyboard():
-    return {
-        'inline_keyboard': [
-            [{'text': '📝 上班', 'callback_data': 'check_in'}],
-            [{'text': '📊 歷史記錄', 'callback_data': 'history'}],
-            [{'text': '⚙️ 設定', 'callback_data': 'settings'}],
-        ]
-    }
-
-def get_settings_keyboard():
-    return {
-        'inline_keyboard': [
-            [{'text': '7 小時', 'callback_data': 'hours_7'}, {'text': '8 小時', 'callback_data': 'hours_8'}],
-            [{'text': '8.5 小時', 'callback_data': 'hours_8.5'}, {'text': '9 小時', 'callback_data': 'hours_9'}],
-            [{'text': '提醒開', 'callback_data': 'remind_on'}, {'text': '提醒關', 'callback_data': 'remind_off'}],
-            [{'text': '5 分鐘', 'callback_data': 'min_5'}, {'text': '10 分鐘', 'callback_data': 'min_10'}],
-            [{'text': '返回主選單', 'callback_data': 'back'}],
-        ]
-    }
 
 def supabase_request(table, method='GET', data=None, filters=None):
     url = f"{SUPABASE_URL}/rest/v1/{table}"
@@ -81,7 +60,7 @@ def supabase_request(table, method='GET', data=None, filters=None):
         if response.status_code in [200, 201, 206]:
             return response.json()
         else:
-            logger.error(f"Supabase error: {response.status_code} - {response.text}")
+            logger.error(f"Supabase error: {response.status_code}")
             return None
     except Exception as e:
         logger.error(f"Supabase request error: {e}")
@@ -127,75 +106,129 @@ def record_check_in(telegram_id: str, chat_id: str):
     check_in = get_taiwan_time()
     work_hours = user.get('work_hours', 8.5)
     scheduled_check_out = check_in + timedelta(hours=work_hours)
+    remind_enabled = user.get('remind_enabled', True)
+    remind_minutes = user.get('remind_minutes', 10)
+    
+    if remind_enabled:
+        early_remind_time = scheduled_check_out - timedelta(minutes=remind_minutes)
+        early_remind_type = 'early_remind'
+    else:
+        early_remind_time = None
+        early_remind_type = None
     
     record_data = {
         'user_id': user['id'],
+        'telegram_id': telegram_id,
+        'chat_id': str(chat_id),
         'check_in': check_in.isoformat(),
         'scheduled_check_out': scheduled_check_out.isoformat(),
-        'chat_id': str(chat_id)
+        'early_remind_time': early_remind_time.isoformat() if early_remind_time else None,
+        'early_remind_type': early_remind_type,
+        'early_remind_sent': False,
+        'main_remind_sent': False
     }
     
     record = supabase_request('telegram_work_records', method='POST', data=record_data)
     
-    schedule_reminders(user, check_in, scheduled_check_out, chat_id)
-    
     return {
         'record': record[0] if record else None,
         'scheduled_check_out': scheduled_check_out,
-        'work_hours': work_hours
+        'work_hours': work_hours,
+        'remind_enabled': remind_enabled,
+        'remind_minutes': remind_minutes
     }
 
-def schedule_reminders(user, check_in, scheduled_check_out, chat_id):
-    from apscheduler.triggers.date import DateTrigger
+def get_main_keyboard():
+    return {
+        'inline_keyboard': [
+            [{'text': '📝 上班', 'callback_data': 'check_in'}],
+            [{'text': '📊 歷史記錄', 'callback_data': 'history'}],
+            [{'text': '⚙️ 設定', 'callback_data': 'settings'}],
+        ]
+    }
+
+def get_settings_keyboard():
+    return {
+        'inline_keyboard': [
+            [{'text': '7 小時', 'callback_data': 'hours_7'}, {'text': '8 小時', 'callback_data': 'hours_8'}],
+            [{'text': '8.5 小時', 'callback_data': 'hours_8.5'}, {'text': '9 小時', 'callback_data': 'hours_9'}],
+            [{'text': '提醒開', 'callback_data': 'remind_on'}, {'text': '提醒關', 'callback_data': 'remind_off'}],
+            [{'text': '5 分鐘', 'callback_data': 'min_5'}, {'text': '10 分鐘', 'callback_data': 'min_10'}],
+            [{'text': '返回主選單', 'callback_data': 'back'}],
+        ]
+    }
+
+def check_and_send_reminders():
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
     
-    telegram_id = user['telegram_id']
-    remind_enabled = user.get('remind_enabled', True)
-    remind_minutes = user.get('remind_minutes', 10)
+    now = get_taiwan_time()
     
-    job_id_prefix = f"{telegram_id}_{check_in.strftime('%Y%m%d%H%M%S')}"
+    records = supabase_request('telegram_work_records', 
+                              filters={'early_remind_sent': 'eq.false'})
     
-    if remind_enabled:
-        early_remind_time = scheduled_check_out - timedelta(minutes=remind_minutes)
-        if early_remind_time > get_taiwan_time():
-            scheduler.add_job(
-                send_reminder,
-                trigger=DateTrigger(run_date=early_remind_time),
-                args=[chat_id, early_remind_time, remind_minutes],
-                id=f"{job_id_prefix}_early",
-                replace_existing=True
-            )
+    for record in records or []:
+        chat_id = record.get('chat_id')
+        early_remind_time_str = record.get('early_remind_time')
+        scheduled_check_out_str = record.get('scheduled_check_out')
+        early_remind_sent = record.get('early_remind_sent', False)
+        main_remind_sent = record.get('main_remind_sent', False)
+        
+        if not chat_id:
+            continue
+        
+        if early_remind_time_str and not early_remind_sent:
+            try:
+                early_remind_time = datetime.fromisoformat(early_remind_time_str.replace('Z', '+00:00'))
+            except:
+                early_remind_time = None
+            
+            if early_remind_time and now >= early_remind_time:
+                try:
+                    remind_minutes = 10
+                    user = get_or_create_user(record.get('telegram_id', ''))
+                    if user:
+                        remind_minutes = user.get('remind_minutes', 10)
+                except:
+                    remind_minutes = 10
+                
+                message = f"⏰ *提前 {remind_minutes} 分鐘提醒*\n\n您的下班時間快到了！"
+                send_message(chat_id, message)
+                
+                supabase_request('telegram_work_records', method='PATCH',
+                              data={'early_remind_sent': True},
+                              filters={'id': f"eq.{record.get('id')}"})
+                
+                logger.info(f"已發送提前提醒給 {chat_id}")
+        
+        if scheduled_check_out_str and not main_remind_sent:
+            try:
+                scheduled_check_out = datetime.fromisoformat(scheduled_check_out_str.replace('Z', '+00:00'))
+            except:
+                scheduled_check_out = None
+            
+            if scheduled_check_out and now >= scheduled_check_out:
+                message = f"🎉 *下班時間到了！*\n\n辛苦您了，可以下班了！"
+                send_message(chat_id, message)
+                
+                supabase_request('telegram_work_records', method='PATCH',
+                              data={'main_remind_sent': True},
+                              filters={'id': f"eq.{record.get('id')}"})
+                
+                logger.info(f"已發送下班提醒給 {chat_id}")
+
+def start_scheduler():
+    if not scheduler.running:
+        scheduler.start()
     
     scheduler.add_job(
-        send_reminder,
-        trigger=DateTrigger(run_date=scheduled_check_out),
-        args=[chat_id, scheduled_check_out, 0],
-        id=f"{job_id_prefix}_main",
+        check_and_send_reminders,
+        'interval',
+        minutes=1,
+        id='check_reminders',
         replace_existing=True
     )
-
-def send_reminder(chat_id, check_out_time, minutes):
-    try:
-        if minutes > 0:
-            message = f"⏰ *提前 {minutes} 分鐘提醒*\n\n您的下班時間快到了！\n預定下班時間：{check_out_time.strftime('%H:%M')}"
-        else:
-            message = f"🎉 *下班時間到了！*\n\n辛苦您了，可以下班了！\n下班時間：{check_out_time.strftime('%H:%M')}"
-        
-        send_message(chat_id, message)
-        logger.info(f"已發送提醒給 {chat_id}")
-    except Exception as e:
-        logger.error(f"發送提醒失敗: {e}")
-
-def schedule_test_reminder(chat_id, delay_seconds):
-    import threading
-    def send_later():
-        test_time = get_taiwan_time() + timedelta(seconds=delay_seconds)
-        message = f"🎉 *測試提醒！*\n\n下班時間：{test_time.strftime('%H:%M:%S')}"
-        send_message(chat_id, message)
-        logger.info(f"測試提醒已發送給 {chat_id}")
-    
-    timer = threading.Timer(delay_seconds, send_later)
-    timer.start()
-    logger.info(f"測試提醒已排程，{delay_seconds}秒後發送")
+    logger.info("排程檢查提醒已啟動")
 
 def get_user_history(telegram_id: str, limit: int = 10):
     if not SUPABASE_URL or not SUPABASE_KEY:
@@ -246,7 +279,13 @@ def format_history_message(records):
 
 @app.route("/health")
 def health():
+    check_and_send_reminders()
     return jsonify({'status': 'ok', 'time': get_taiwan_time().isoformat()})
+
+@app.route("/check")
+def check_reminders():
+    check_and_send_reminders()
+    return jsonify({'status': 'ok', 'checked': True})
 
 @app.route("/")
 def index():
@@ -255,8 +294,6 @@ def index():
 @app.route("/telegram/webhook", methods=['POST'])
 def telegram_webhook():
     data = request.get_json()
-    
-    logger.info(f"Received telegram update: {data}")
     
     if not data:
         return jsonify({'status': 'ok'})
@@ -276,7 +313,6 @@ def telegram_webhook():
             if result:
                 work_hours = result['work_hours']
                 scheduled = result['scheduled_check_out']
-                user = get_or_create_user(user_id)
                 
                 message_text = f"✅ *上班打卡成功！*\n\n"
                 message_text += f"上班時間：{get_taiwan_time().strftime('%H:%M')}\n"
@@ -284,8 +320,8 @@ def telegram_webhook():
                 message_text += f"工作時長：{work_hours} 小時\n\n"
                 message_text += f"⏰ 系統會在下班時間提醒您！"
                 
-                if user and user.get('remind_enabled', True):
-                    remind_min = user.get('remind_minutes', 10)
+                if result.get('remind_enabled'):
+                    remind_min = result.get('remind_minutes', 10)
                     early_time = scheduled - timedelta(minutes=remind_min)
                     message_text += f"\n⚡ 提前 {remind_min} 分鐘也會提醒您"
             else:
@@ -362,9 +398,8 @@ def telegram_webhook():
             message_text += f"工作時長：{work_hours} 小時\n\n"
             message_text += f"⏰ 系統會在下班時間提醒您！"
             
-            user = get_or_create_user(user_id)
-            if user and user.get('remind_enabled', True):
-                remind_min = user.get('remind_minutes', 10)
+            if result.get('remind_enabled'):
+                remind_min = result.get('remind_minutes', 10)
                 early_time = scheduled - timedelta(minutes=remind_min)
                 message_text += f"\n⚡ 提前 {remind_min} 分鐘也會提醒您"
         else:
@@ -373,10 +408,15 @@ def telegram_webhook():
         send_message(chat_id, message_text, get_main_keyboard())
     
     elif text == '測試':
-        message_text = f"✅ *測試功能啟動！*\n\n10秒後您會收到提醒訊息..."
-        send_message(chat_id, message_text, get_main_keyboard())
+        result = record_check_in(user_id, chat_id)
+        if result:
+            message_text = f"✅ *測試打卡成功！*\n\n"
+            message_text += f"上班時間：{get_taiwan_time().strftime('%H:%M:%S')}\n"
+            message_text += f"⏰ 10秒後會收到提醒！"
+        else:
+            message_text = "❌ 測試失敗"
         
-        schedule_test_reminder(chat_id, 10)
+        send_message(chat_id, message_text, get_main_keyboard())
     
     elif text == '歷史' or text == '歷史記錄':
         records = get_user_history(user_id, 10)
@@ -436,6 +476,8 @@ def set_webhook():
     data = {'url': webhook_url}
     response = requests.post(url, json=data)
     return jsonify(response.json())
+
+start_scheduler()
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
