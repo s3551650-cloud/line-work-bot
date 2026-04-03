@@ -185,6 +185,18 @@ def send_reminder(chat_id, check_out_time, minutes):
     except Exception as e:
         logger.error(f"發送提醒失敗: {e}")
 
+def schedule_test_reminder(chat_id, delay_seconds):
+    import threading
+    def send_later():
+        test_time = get_taiwan_time() + timedelta(seconds=delay_seconds)
+        message = f"🎉 *測試提醒！*\n\n下班時間：{test_time.strftime('%H:%M:%S')}"
+        send_message(chat_id, message)
+        logger.info(f"測試提醒已發送給 {chat_id}")
+    
+    timer = threading.Timer(delay_seconds, send_later)
+    timer.start()
+    logger.info(f"測試提醒已排程，{delay_seconds}秒後發送")
+
 def get_user_history(telegram_id: str, limit: int = 10):
     if not SUPABASE_URL or not SUPABASE_KEY:
         return []
@@ -277,28 +289,6 @@ def telegram_webhook():
             
             send_message(chat_id, message_text, get_main_keyboard())
         
-        elif data_cb == 'test':
-            test_check_in = get_taiwan_time()
-            test_check_out = test_check_in + timedelta(seconds=10)
-            
-            from apscheduler.triggers.date import DateTrigger
-            
-            job_id = f"test_{user_id}"
-            scheduler.add_job(
-                send_reminder,
-                trigger=DateTrigger(run_date=test_check_out),
-                args=[chat_id, test_check_out, 0],
-                id=job_id,
-                replace_existing=True
-            )
-            
-            message_text = f"✅ *測試打卡成功！*\n\n"
-            message_text += f"上班時間：{test_check_in.strftime('%H:%M:%S')}\n"
-            message_text += f"預定下班：{test_check_out.strftime('%H:%M:%S')}\n"
-            message_text += f"⏰ 10秒後收到提醒！"
-            
-            send_message(chat_id, message_text, get_main_keyboard())
-        
         elif data_cb == 'history':
             records = get_user_history(user_id, 10)
             message_text = format_history_message(records)
@@ -378,27 +368,11 @@ def telegram_webhook():
         
         send_message(chat_id, message_text, get_main_keyboard())
     
-    elif text == '測試':
-        test_check_in = get_taiwan_time()
-        test_check_out = test_check_in + timedelta(seconds=10)
-        
-        from apscheduler.triggers.date import DateTrigger
-        
-        job_id = f"test_{user_id}"
-        scheduler.add_job(
-            send_reminder,
-            trigger=DateTrigger(run_date=test_check_out),
-            args=[chat_id, test_check_out, 0],
-            id=job_id,
-            replace_existing=True
-        )
-        
-        message_text = f"✅ *測試打卡成功！*\n\n"
-        message_text += f"上班時間：{test_check_in.strftime('%H:%M:%S')}\n"
-        message_text += f"預定下班：{test_check_out.strftime('%H:%M:%S')}\n"
-        message_text += f"⏰ 10秒後收到提醒！"
-        
+    if text == '測試':
+        message_text = f"✅ *測試功能啟動！*\n\n10秒後您會收到提醒訊息..."
         send_message(chat_id, message_text, get_main_keyboard())
+        
+        schedule_test_reminder(chat_id, 10)
     
     elif text == '歷史' or text == '歷史記錄':
         records = get_user_history(user_id, 10)
