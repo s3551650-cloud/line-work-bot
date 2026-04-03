@@ -1,5 +1,6 @@
 import os
 import logging
+import json
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 from linebot import LineBotApi, WebhookHandler
@@ -9,8 +10,7 @@ from linebot.models import (
     PostbackEvent, MessageEvent
 )
 from linebot.exceptions import InvalidSignatureError
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 
 logging.basicConfig(level=logging.INFO)
@@ -20,7 +20,8 @@ app = Flask(__name__)
 
 LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET', '')
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_ACCESS_TOKEN', '')
-DATABASE_URL = os.environ.get('DATABASE_URL', '')
+SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
+SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '')
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
@@ -28,94 +29,93 @@ handler = WebhookHandler(LINE_CHANNEL_SECRET)
 scheduler = BackgroundScheduler()
 scheduler.start()
 
-def get_db_connection():
-    if not DATABASE_URL:
+def supabase_request(table, method='GET', data=None, filters=None):
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    headers = {
+        'apikey': SUPABASE_KEY,
+        'Authorization': f'Bearer {SUPABASE_KEY}',
+        'Content-Type': 'application/json',
+        'Prefer': 'return=representation'
+    }
+    
+    if filters:
+        query = '&'.join([f"{k}={v}" for k, v in filters.items()])
+        url = f"{url}?{query}"
+    
+    try:
+        if method == 'GET':
+            response = requests.get(url, headers=headers)
+        elif method == 'POST':
+            response = requests.post(url, headers=headers, json=data)
+        elif method == 'PATCH':
+            response = requests.patch(url, headers=headers, json=data)
+            response = requests.patch(url, headers=headers, data=json.dumps(data))
+        
+        if response.status_code in [200, 201, 206]:
+            return response.json()
+        else:
+            logger.error(f"Supabase error: {response.status_code} - {response.text}")
+            return None
+    except Exception as e:
+        logger.error(f"Supabase request error: {e}")
         return None
-    return psycopg2.connect(DATABASE_URL)
 
 def get_or_create_user(line_id: str):
-    conn = get_db_connection()
-    if not conn:
+    if not SUPABASE_URL or not SUPABASE_KEY:
         return None
     
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT * FROM users WHERE line_id = %s", (line_id,))
-            user = cur.fetchone()
-            
-            if user:
-                return dict(user)
-            
-            cur.execute(
-                "INSERT INTO users (line_id, work_hours, remind_enabled, remind_minutes) VALUES (%s, 8.5, TRUE, 10) RETURNING *",
-                (line_id,)
-            )
-            conn.commit()
-            user = cur.fetchone()
-            return dict(user) if user else None
-    except Exception as e:
-        logger.error(f"Database error: {e}")
-        conn.rollback()
-        return None
-    finally:
-        conn.close()
+    result = supabase_request('users', filters={'line_id': f'eq.{line_id}'})
+    
+    if result and len(result) > 0:
+        return result[0]
+    
+    user_data = {
+        'line_id': line_id,
+        'work_hours': 8.5,
+        'remind_enabled': True,
+        'remind_minutes': 10
+    }
+    
+    new_user = supabase_request('users', method='POST', data=user_data)
+    return new_user[0] if new_user else None
 
 def update_user_settings(line_id: str, **kwargs):
-    conn = get_db_connection()
-    if not conn:
+    if not SUPABASE_URL or not SUPABASE_KEY:
         return False
     
-    try:
-        with conn.cursor() as cur:
-            for key, value in kwargs.items():
-                cur.execute(
-                    "UPDATE users SET {} = %s WHERE line_id = %s".format(key),
-                    (value, line_id)
-                )
-            conn.commit()
-            return True
-    except Exception as e:
-        logger.error(f"Database error: {e}")
-        conn.rollback()
-        return False
-    finally:
-        conn.close()
+    for key, value in kwargs.items():
+        supabase_request('users', method='PATCH', 
+                       data={key: value},
+                       filters={'line_id': f'eq.{line_id}'})
+    return True
 
 def record_check_in(line_id: str):
-    conn = get_db_connection()
-    if not conn:
+    if not SUPABASE_URL or not SUPABASE_KEY:
         return None
     
-    try:
-        user = get_or_create_user(line_id)
-        if not user:
-            return None
-        
-        check_in = datetime.now()
-        work_hours = user.get('work_hours', 8.5)
-        scheduled_check_out = check_in + timedelta(hours=work_hours)
-        
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                "INSERT INTO work_records (user_id, check_in, scheduled_check_out) VALUES (%s, %s, %s) RETURNING *",
-                (user['id'], check_in, scheduled_check_out)
-            )
-            conn.commit()
-            record = cur.fetchone()
-            
-            schedule_reminders(user, check_in, scheduled_check_out)
-            
-            return {
-                'record': dict(record) if record else None,
-                'scheduled_check_out': scheduled_check_out,
-                'work_hours': work_hours
-            }
-    except Exception as e:
-        logger.error(f"Database error: {e}")
-        conn.rollback()
+    user = get_or_create_user(line_id)
+    if not user:
         return None
-    finally:
-        conn.close()
+    
+    check_in = datetime.now()
+    work_hours = user.get('work_hours', 8.5)
+    scheduled_check_out = check_in + timedelta(hours=work_hours)
+    
+    record_data = {
+        'user_id': user['id'],
+        'check_in': check_in.isoformat(),
+        'scheduled_check_out': scheduled_check_out.isoformat()
+    }
+    
+    record = supabase_request('work_records', method='POST', data=record_data)
+    
+    schedule_reminders(user, check_in, scheduled_check_out)
+    
+    return {
+        'record': record[0] if record else None,
+        'scheduled_check_out': scheduled_check_out,
+        'work_hours': work_hours
+    }
 
 def schedule_reminders(user, check_in, scheduled_check_out):
     from apscheduler.triggers.date import DateTrigger
@@ -159,27 +159,18 @@ def send_reminder(line_id, check_out_time, reminder_type, minutes):
         logger.error(f"發送提醒失敗: {e}")
 
 def get_user_history(line_id: str, limit: int = 10):
-    conn = get_db_connection()
-    if not conn:
+    if not SUPABASE_URL or not SUPABASE_KEY:
         return []
     
-    try:
-        user = get_or_create_user(line_id)
-        if not user:
-            return []
-        
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                "SELECT * FROM work_records WHERE user_id = %s ORDER BY check_in DESC LIMIT %s",
-                (user['id'], limit)
-            )
-            records = cur.fetchall()
-            return [dict(r) for r in records]
-    except Exception as e:
-        logger.error(f"Database error: {e}")
+    user = get_or_create_user(line_id)
+    if not user:
         return []
-    finally:
-        conn.close()
+    
+    records = supabase_request('work_records', 
+                             filters={'user_id': f"eq.{user['id']}", 'select': '*'})
+    if records:
+        records = sorted(records, key=lambda x: x.get('check_in', ''), reverse=True)[:limit]
+    return records or []
 
 def format_history_message(records):
     if not records:
@@ -188,18 +179,36 @@ def format_history_message(records):
     message = "最近打卡記錄：\n\n"
     
     for i, record in enumerate(records, 1):
-        check_in = record['check_in']
+        check_in = record.get('check_in', '')
         scheduled = record.get('scheduled_check_out')
         actual = record.get('actual_check_out')
         
-        date_str = check_in.strftime('%Y/%m/%d') if isinstance(check_in, datetime) else str(check_in)
-        time_str = check_in.strftime('%H:%M') if isinstance(check_in, datetime) else ''
+        if isinstance(check_in, str):
+            try:
+                check_in = datetime.fromisoformat(check_in.replace('Z', '+00:00'))
+            except:
+                pass
+        
+        if isinstance(scheduled, str):
+            try:
+                scheduled = datetime.fromisoformat(scheduled.replace('Z', '+00:00'))
+            except:
+                pass
+        
+        if isinstance(actual, str):
+            try:
+                actual = datetime.fromisoformat(actual.replace('Z', '+00:00'))
+            except:
+                pass
+        
+        date_str = check_in.strftime('%Y/%m/%d') if isinstance(check_in, datetime) else 'N/A'
+        time_str = check_in.strftime('%H:%M') if isinstance(check_in, datetime) else 'N/A'
         
         if scheduled:
-            scheduled_str = scheduled.strftime('%H:%M') if isinstance(scheduled, datetime) else ''
+            scheduled_str = scheduled.strftime('%H:%M') if isinstance(scheduled, datetime) else 'N/A'
             message += f"{i}. {date_str} 上班 {time_str} -> 預定下班 {scheduled_str}"
             if actual:
-                actual_str = actual.strftime('%H:%M') if isinstance(actual, datetime) else ''
+                actual_str = actual.strftime('%H:%M') if isinstance(actual, datetime) else 'N/A'
                 message += f" -> 實際下班 {actual_str}"
         else:
             message += f"{i}. {date_str} 上班 {time_str}"

@@ -106,7 +106,8 @@ CREATE TABLE work_records (
 |---------|-----|
 | `LINE_CHANNEL_SECRET` | 你的 Channel Secret |
 | `LINE_ACCESS_TOKEN` | 你的 Channel Access Token |
-| `DATABASE_URL` | 你的 Supabase PostgreSQL 連線字串 |
+| `SUPABASE_URL` | 你的 Supabase URL（格式：https://xxx.supabase.co） |
+| `SUPABASE_KEY` | 你的 Supabase anon key |
 
 ### 5. 部署完成
 1. 等待部署完成（約 2-3 分鐘）
