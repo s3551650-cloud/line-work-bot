@@ -368,7 +368,7 @@ def telegram_webhook():
         
         send_message(chat_id, message_text, get_main_keyboard())
     
-    if text == '測試':
+    elif text == '測試':
         message_text = f"✅ *測試功能啟動！*\n\n10秒後您會收到提醒訊息..."
         send_message(chat_id, message_text, get_main_keyboard())
         
