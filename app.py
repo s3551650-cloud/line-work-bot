@@ -5,10 +5,10 @@ from flask import Flask, request, jsonify
 from linebot import LineBotApi, WebhookHandler
 from linebot.models import (
     ButtonsTemplate, PostbackTemplateAction, PostbackAction, MessageAction,
-    TextSendMessage, TemplateSendMessage, RichMenu, RichMenuArea, RichMenuBounds
+    TextSendMessage, TemplateSendMessage, RichMenu, RichMenuArea, RichMenuBounds,
+    PostbackEvent, MessageEvent
 )
 from linebot.exceptions import InvalidSignatureError
-from linebot.webhooks import PostbackEvent, MessageEvent
 from supabase import create_client, Client
 from apscheduler.schedulers.background import BackgroundScheduler
 
