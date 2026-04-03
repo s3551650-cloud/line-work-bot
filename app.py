@@ -3,10 +3,10 @@ import logging
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 from linebot import LineBotApi, WebhookHandler
-from linebot.models.template import TemplateMessage, ButtonsTemplate, PostbackTemplateAction
-from linebot.models.actions import PostbackAction, MessageAction
-from linebot.models.messages import TextSendMessage
-from linebot.models.rich_menu import RichMenu, RichMenuArea, RichMenuBounds
+from linebot.models import (
+    ButtonsTemplate, PostbackTemplateAction, PostbackAction, MessageAction,
+    TextSendMessage, TemplateMessage, RichMenu, RichMenuArea, RichMenuBounds
+)
 from linebot.exceptions import InvalidSignatureError
 from linebot.webhooks import PostbackEvent, MessageEvent
 from supabase import create_client, Client
