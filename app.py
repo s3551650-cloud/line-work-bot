@@ -6,8 +6,7 @@ from flask import Flask, request, jsonify
 from linebot import LineBotApi, WebhookHandler
 from linebot.models import (
     ButtonsTemplate, PostbackTemplateAction, PostbackAction, MessageAction,
-    TextSendMessage, TemplateSendMessage, RichMenu, RichMenuArea, RichMenuBounds,
-    PostbackEvent, MessageEvent
+    TextSendMessage, TemplateSendMessage, PostbackEvent, MessageEvent
 )
 from linebot.exceptions import InvalidSignatureError
 import requests
@@ -220,44 +219,6 @@ def format_history_message(records):
     
     return message
 
-def create_rich_menu():
-    rich_menu = {
-        "size": {"width": 2500, "height": 843},
-        "selected": True,
-        "name": "上班打卡選單",
-        "chatBarText": "選單",
-        "areas": [
-            {
-                "bounds": {"x": 0, "y": 0, "width": 833, "height": 843},
-                "action": {
-                    "type": "postback",
-                    "label": "上班",
-                    "data": "action=check_in",
-                    "displayText": "上班"
-                }
-            },
-            {
-                "bounds": {"x": 833, "y": 0, "width": 833, "height": 843},
-                "action": {
-                    "type": "postback",
-                    "label": "歷史記錄",
-                    "data": "action=history",
-                    "displayText": "查詢歷史"
-                }
-            },
-            {
-                "bounds": {"x": 1666, "y": 0, "width": 834, "height": 843},
-                "action": {
-                    "type": "postback",
-                    "label": "設定",
-                    "data": "action=settings",
-                    "displayText": "設定"
-                }
-            }
-        ]
-    }
-    return rich_menu
-
 @app.route("/")
 def index():
     return "LINE Bot 運作中"
@@ -453,41 +414,6 @@ def handle_message(event):
     else:
         message = "您好！請使用以下指令：\n\n• 「上班」- 打卡\n• 「歷史」- 查看記錄\n• 「設定」- 調整選項\n• 「幫助」- 查看說明\n\n或點擊下方選單按鈕"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=message))
-
-@app.route("/setup-richmenu", methods=['GET'])
-def setup_richmenu():
-    try:
-        rich_menu = create_rich_menu()
-        
-        url = f'https://api.line.me/v2/bot/richmenu'
-        headers = {
-            'Authorization': f'Bearer {LINE_CHANNEL_ACCESS_TOKEN}',
-            'Content-Type': 'application/json'
-        }
-        
-        import requests as req
-        response = req.post(url, headers=headers, json=rich_menu)
-        result = response.json()
-        
-        if response.status_code == 200:
-            rich_menu_id = result.get('richMenuId')
-            
-            image_url = f'https://api.line.me/v2/bot/richmenu/{rich_menu_id}/content'
-            blank_image = bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x09, 0xC4, 0x00, 0x00, 0x03, 0x4B, 0x08, 0x06, 0x00, 0x00, 0x00, 0xD4, 0x00, 0x6C, 0x00, 0x00, 0x00, 0x01, 0x73, 0x52, 0x47, 0x42, 0x00, 0xAE, 0xCE, 0x1C, 0xE9, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0x60, 0x60, 0x60, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01, 0x27, 0x2C, 0xED, 0xA3, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82])
-            
-            img_response = req.post(image_url, headers={**headers, 'Content-Type': 'image/png'}, data=blank_image)
-            
-            if img_response.status_code == 200:
-                link_url = f'https://api.line.me/v2/bot/user/all/richmenu/{rich_menu_id}'
-                link_response = req.post(link_url, headers=headers)
-                
-                return jsonify({'status': 'ok', 'rich_menu_id': rich_menu_id, 'message': 'Rich menu created and set as default'})
-            else:
-                return jsonify({'status': 'ok', 'rich_menu_id': rich_menu_id, 'note': 'Image not set'})
-        else:
-            return jsonify({'status': 'error', 'message': result}), 400
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
