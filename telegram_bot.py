@@ -22,10 +22,30 @@ scheduler.start()
 def get_taiwan_time():
     return datetime.utcnow() + timedelta(hours=8)
 
-def send_telegram_message(chat_id, text):
+def send_telegram_message(chat_id, text, buttons=None):
     url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
     data = {'chat_id': chat_id, 'text': text}
+    if buttons:
+        data['reply_markup'] = {'keyboard': buttons, 'resize_keyboard': True}
     requests.post(url, json=data)
+
+def send_inline_buttons(chat_id, text, buttons):
+    url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
+    keyboard = [[{'text': btn['text'], 'callback_data': btn['data']}] for btn in buttons]
+    data = {
+        'chat_id': chat_id, 
+        'text': text,
+        'reply_markup': {'inline_keyboard': keyboard}
+    }
+    requests.post(url, json=data)
+
+def get_main_buttons():
+    return [
+        [{'text': '上班', 'callback_data': 'check_in'}],
+        [{'text': '測試', 'callback_data': 'test'}],
+        [{'text': '歷史記錄', 'callback_data': 'history'}],
+        [{'text': '設定', 'callback_data': 'settings'}],
+    ]
 
 def supabase_request(table, method='GET', data=None, filters=None):
     url = f"{SUPABASE_URL}/rest/v1/{table}"
@@ -223,6 +243,108 @@ def index():
 def telegram_webhook():
     data = request.get_json()
     
+    if 'callback_query' in data:
+        query = data['callback_query']
+        chat_id = query['message']['chat']['id']
+        user_id = str(query['from']['id'])
+        data_cb = query['data']
+        
+        if data_cb == 'check_in':
+            result = record_check_in(user_id, chat_id)
+            if result:
+                work_hours = result['work_hours']
+                scheduled = result['scheduled_check_out']
+                user = get_or_create_user(user_id)
+                
+                message_text = f"✅ 上班打卡成功！\n\n"
+                message_text += f"上班時間：{get_taiwan_time().strftime('%H:%M')}\n"
+                message_text += f"預定下班：{scheduled.strftime('%H:%M')}\n"
+                message_text += f"工作時長：{work_hours} 小時\n\n"
+                message_text += f"⏰ 系統會在下班時間提醒您！"
+                
+                if user and user.get('remind_enabled', True):
+                    remind_min = user.get('remind_minutes', 10)
+                    early_time = scheduled - timedelta(minutes=remind_min)
+                    message_text += f"\n⚡ 提前 {remind_min} 分鐘也會提醒您"
+            else:
+                message_text = "❌ 打卡失敗，請稍後再試"
+            
+            send_telegram_message(chat_id, message_text, get_main_buttons())
+        
+        elif data_cb == 'test':
+            test_check_in = get_taiwan_time()
+            test_check_out = test_check_in + timedelta(seconds=10)
+            
+            from apscheduler.triggers.date import DateTrigger
+            
+            job_id = f"test_{user_id}"
+            scheduler.add_job(
+                send_telegram_reminder,
+                trigger=DateTrigger(run_date=test_check_out),
+                args=[chat_id, test_check_out, 0],
+                id=job_id,
+                replace_existing=True
+            )
+            
+            message_text = f"✅ 測試打卡成功！\n\n"
+            message_text += f"上班時間：{test_check_in.strftime('%H:%M:%S')}\n"
+            message_text += f"預定下班：{test_check_out.strftime('%H:%M:%S')}\n"
+            message_text += f"⏰ 10秒後收到提醒！"
+            
+            send_telegram_message(chat_id, message_text, get_main_buttons())
+        
+        elif data_cb == 'history':
+            records = get_user_history(user_id, 10)
+            message_text = format_history_message(records)
+            send_telegram_message(chat_id, message_text, get_main_buttons())
+        
+        elif data_cb == 'settings':
+            user = get_or_create_user(user_id)
+            if user:
+                work_hours = user.get('work_hours', 8.5)
+                remind_enabled = user.get('remind_enabled', True)
+                remind_minutes = user.get('remind_minutes', 10)
+                
+                message_text = f"⚙️ 設定選項：\n\n"
+                message_text += f"• 工作時長：{work_hours} 小時\n"
+                message_text += f"• 提前提醒：{'開啟' if remind_enabled else '關閉'}\n"
+                if remind_enabled:
+                    message_text += f"• 提前分鐘：{remind_minutes} 分鐘\n"
+                
+                send_inline_buttons(chat_id, message_text, [
+                    {'text': f'8 小時', 'data': 'hours_8'},
+                    {'text': f'8.5 小時', 'data': 'hours_8.5'},
+                    {'text': f'9 小時', 'data': 'hours_9'},
+                    {'text': f'提醒開', 'data': 'remind_on'},
+                    {'text': f'提醒關', 'data': 'remind_off'},
+                    {'text': f'5 分鐘', 'data': 'min_5'},
+                    {'text': f'10 分鐘', 'data': 'min_10'},
+                    {'text': f'返回主選單', 'data': 'back'},
+                ])
+        
+        elif data_cb.startswith('hours_'):
+            hours = float(data_cb.split('_')[1])
+            update_user_settings(user_id, work_hours=hours)
+            send_telegram_message(chat_id, f"✅ 工作時長已設定為 {hours} 小時", get_main_buttons())
+        
+        elif data_cb == 'remind_on':
+            update_user_settings(user_id, remind_enabled=True)
+            send_telegram_message(chat_id, "✅ 提前提醒已開啟", get_main_buttons())
+        
+        elif data_cb == 'remind_off':
+            update_user_settings(user_id, remind_enabled=False)
+            send_telegram_message(chat_id, "✅ 提前提醒已關閉", get_main_buttons())
+        
+        elif data_cb.startswith('min_'):
+            minutes = int(data_cb.split('_')[1])
+            update_user_settings(user_id, remind_minutes=minutes)
+            send_telegram_message(chat_id, f"✅ 提前提醒分鐘已設定為 {minutes} 分鐘", get_main_buttons())
+        
+        elif data_cb == 'back':
+            send_telegram_message(chat_id, "請選擇功能：", get_main_buttons())
+        
+        return jsonify({'status': 'ok'})
+    
     if 'message' not in data:
         return jsonify({'status': 'ok'})
     
@@ -232,7 +354,7 @@ def telegram_webhook():
     text = message.get('text', '')
     
     if text == '/start':
-        send_telegram_message(chat_id, "歡迎使用上班打卡機器人！\n\n指令：\n• 上班 - 打卡\n• 歷史 - 查看記錄\n• 設定 - 調整選項\n• 測試 - 10秒後收到下班提醒")
+        send_telegram_message(chat_id, "👋 歡迎使用上班打卡機器人！\n\n點擊下方按鈕開始使用：", get_main_buttons())
     
     elif text == '上班':
         result = record_check_in(user_id, chat_id)
@@ -250,11 +372,11 @@ def telegram_webhook():
             if user and user.get('remind_enabled', True):
                 remind_min = user.get('remind_minutes', 10)
                 early_time = scheduled - timedelta(minutes=remind_min)
-                message_text += f"\n⚡ 提前 {remind_min} 分鐘（{early_time.strftime('%H:%M')}）也會提醒您"
+                message_text += f"\n⚡ 提前 {remind_min} 分鐘也會提醒您"
         else:
             message_text = "❌ 打卡失敗，請稍後再試"
         
-        send_telegram_message(chat_id, message_text)
+        send_telegram_message(chat_id, message_text, get_main_buttons())
     
     elif text == '測試':
         test_check_in = get_taiwan_time()
@@ -276,45 +398,62 @@ def telegram_webhook():
         message_text += f"預定下班：{test_check_out.strftime('%H:%M:%S')}\n"
         message_text += f"⏰ 10秒後收到提醒！"
         
-        send_telegram_message(chat_id, message_text)
+        send_telegram_message(chat_id, message_text, get_main_buttons())
     
     elif text == '歷史':
         records = get_user_history(user_id, 10)
         message_text = format_history_message(records)
-        send_telegram_message(chat_id, message_text)
+        send_telegram_message(chat_id, message_text, get_main_buttons())
     
     elif text == '設定':
         user = get_or_create_user(user_id)
         if user:
-            message_text = get_user_settings_message(user)
-            message_text += "\n\n輸入數字調整時長（如：8.5）\n輸入「提醒開/提醒關」切換提醒\n輸入「5分/10分/15分/20分」設定提前分鐘"
-            send_telegram_message(chat_id, message_text)
+            work_hours = user.get('work_hours', 8.5)
+            remind_enabled = user.get('remind_enabled', True)
+            remind_minutes = user.get('remind_minutes', 10)
+            
+            message_text = f"⚙️ 設定選項：\n\n"
+            message_text += f"• 工作時長：{work_hours} 小時\n"
+            message_text += f"• 提前提醒：{'開啟' if remind_enabled else '關閉'}\n"
+            if remind_enabled:
+                message_text += f"• 提前分鐘：{remind_minutes} 分鐘\n"
+            
+            send_inline_buttons(chat_id, message_text, [
+                {'text': f'8 小時', 'data': 'hours_8'},
+                {'text': f'8.5 小時', 'data': 'hours_8.5'},
+                {'text': f'9 小時', 'data': 'hours_9'},
+                {'text': f'提醒開', 'data': 'remind_on'},
+                {'text': f'提醒關', 'data': 'remind_off'},
+                {'text': f'5 分鐘', 'data': 'min_5'},
+                {'text': f'10 分鐘', 'data': 'min_10'},
+                {'text': f'返回主選單', 'data': 'back'},
+            ])
     
-    elif text in ['提醒開', '開提醒']:
+    elif text in ['提醒開', '提醒開']:
         update_user_settings(user_id, remind_enabled=True)
-        send_telegram_message(chat_id, "✅ 提前提醒已開啟")
+        send_telegram_message(chat_id, "✅ 提前提醒已開啟", get_main_buttons())
     
-    elif text in ['提醒關', '關提醒']:
+    elif text in ['提醒關', '提醒關']:
         update_user_settings(user_id, remind_enabled=False)
-        send_telegram_message(chat_id, "✅ 提前提醒已關閉")
+        send_telegram_message(chat_id, "✅ 提前提醒已關閉", get_main_buttons())
     
     elif text.endswith('分') and text[:-1].isdigit():
         minutes = int(text[:-1])
         if 1 <= minutes <= 60:
             update_user_settings(user_id, remind_minutes=minutes)
-            send_telegram_message(chat_id, f"✅ 提前提醒分鐘已設定為 {minutes} 分鐘")
+            send_telegram_message(chat_id, f"✅ 提前提醒分鐘已設定為 {minutes} 分鐘", get_main_buttons())
     
     else:
         try:
             hours = float(text)
             if 1 <= hours <= 24:
                 update_user_settings(user_id, work_hours=hours)
-                send_telegram_message(chat_id, f"✅ 工作時長已設定為 {hours} 小時")
+                send_telegram_message(chat_id, f"✅ 工作時長已設定為 {hours} 小時", get_main_buttons())
                 return jsonify({'status': 'ok'})
         except ValueError:
             pass
         
-        send_telegram_message(chat_id, "請使用以下指令：\n\n• 上班 - 打卡\n• 歷史 - 查看記錄\n• 設定 - 調整選項\n• 測試 - 10秒後收到下班提醒")
+        send_telegram_message(chat_id, "👋 請選擇功能：", get_main_buttons())
     
     return jsonify({'status': 'ok'})
 
