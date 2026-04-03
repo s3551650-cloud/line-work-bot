@@ -419,6 +419,7 @@ def telegram_webhook():
                 message_text += f"• 提前分鐘：{remind_minutes} 分鐘\n"
             
             send_inline_buttons(chat_id, message_text, [
+                {'text': f'7 小時', 'data': 'hours_7'},
                 {'text': f'8 小時', 'data': 'hours_8'},
                 {'text': f'8.5 小時', 'data': 'hours_8.5'},
                 {'text': f'9 小時', 'data': 'hours_9'},
