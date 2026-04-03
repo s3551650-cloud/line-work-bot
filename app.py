@@ -5,7 +5,7 @@ from flask import Flask, request, jsonify
 from linebot import LineBotApi, WebhookHandler
 from linebot.models import (
     ButtonsTemplate, PostbackTemplateAction, PostbackAction, MessageAction,
-    TextSendMessage, TemplateMessage, RichMenu, RichMenuArea, RichMenuBounds
+    TextSendMessage, TemplateSendMessage, RichMenu, RichMenuArea, RichMenuBounds
 )
 from linebot.exceptions import InvalidSignatureError
 from linebot.webhooks import PostbackEvent, MessageEvent
@@ -297,7 +297,7 @@ def handle_postback(event):
                 ]
             )
             
-            line_bot_api.reply_message(event.reply_token, [TextSendMessage(text=message), TemplateMessage(alt_text="設定選項", template=buttons)])
+            line_bot_api.reply_message(event.reply_token, [TextSendMessage(text=message), TemplateSendMessage(alt_text="設定選項", template=buttons)])
     
     elif 'action=set_hours' in data:
         buttons = ButtonsTemplate(
@@ -308,7 +308,7 @@ def handle_postback(event):
                 PostbackTemplateAction(label="自訂", data="hours=custom")
             ]
         )
-        line_bot_api.reply_message(event.reply_token, TemplateMessage(alt_text="選擇時長", template=buttons))
+        line_bot_api.reply_message(event.reply_token, TemplateSendMessage(alt_text="選擇時長", template=buttons))
     
     elif 'action=toggle_remind' in data:
         user = get_or_create_user(line_id)
@@ -327,7 +327,7 @@ def handle_postback(event):
                 PostbackTemplateAction(label="20 分鐘", data="remind_min=20")
             ]
         )
-        line_bot_api.reply_message(event.reply_token, TemplateMessage(alt_text="選擇分鐘", template=buttons))
+        line_bot_api.reply_message(event.reply_token, TemplateSendMessage(alt_text="選擇分鐘", template=buttons))
     
     elif data.startswith('hours='):
         hours_str = data.split('=')[1]
