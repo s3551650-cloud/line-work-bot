@@ -244,6 +244,10 @@ def format_history_message(records):
     
     return message
 
+@app.route("/health")
+def health():
+    return jsonify({'status': 'ok', 'time': get_taiwan_time().isoformat()})
+
 @app.route("/")
 def index():
     return "Telegram Bot 運作中"
