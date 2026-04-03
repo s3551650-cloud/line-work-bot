@@ -219,7 +219,8 @@ def format_history_message(records):
 
 def create_rich_menu():
     rich_menu = RichMenu(
-        size=RichMenuBounds(width=2500, height=843),
+        width=2500,
+        height=843,
         selected=True,
         name="上班打卡選單",
         chat_bar_text="選單",
