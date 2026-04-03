@@ -30,10 +30,17 @@ def send_message(chat_id, text, reply_markup=None):
 def get_main_keyboard():
     return {
         'inline_keyboard': [
-            [{'text': '上班', 'callback_data': 'check_in'}],
-            [{'text': '測試', 'callback_data': 'test'}],
-            [{'text': '歷史記錄', 'callback_data': 'history'}],
-            [{'text': '設定', 'callback_data': 'settings'}],
+            [{'text': '📝 上班', 'callback_data': 'check_in'}],
+            [{'text': '📊 歷史記錄', 'callback_data': 'history'}],
+            [{'text': '⚙️ 設定', 'callback_data': 'settings'}],
+        ]
+    }
+
+def get_test_keyboard():
+    return {
+        'inline_keyboard': [
+            [{'text': '✅ 確認測試', 'callback_data': 'do_test'}],
+            [{'text': '⬅️ 返回', 'callback_data': 'back'}],
         ]
     }
 
@@ -267,6 +274,10 @@ def telegram_webhook():
             send_message(chat_id, message_text, get_main_keyboard())
         
         elif data_cb == 'test':
+            message_text = f"🧪 *測試功能*\n\n按下「測試打卡」後，10秒會收到下班提醒\n\n確定要測試嗎？"
+            send_message(chat_id, message_text, get_test_keyboard())
+        
+        elif data_cb == 'do_test':
             test_check_in = get_taiwan_time()
             test_check_out = test_check_in + timedelta(seconds=10)
             
@@ -343,7 +354,7 @@ def telegram_webhook():
         return jsonify({'status': 'ok'})
     
     if text == '/start':
-        send_message(chat_id, "👋 歡迎使用上班打卡機器人！\n\n點擊下方按鈕開始使用：", get_main_keyboard())
+        send_message(chat_id, "👋 歡迎使用上班打卡機器人！\n\n直接輸入指令或點擊按鈕：\n\n📝 上班 - 打卡\n📊 歷史 - 查看記錄\n⚙️ 設定 - 調整選項\n🧪 測試 - 測試功能", get_main_keyboard())
     
     elif text == '上班':
         result = record_check_in(user_id, chat_id)
