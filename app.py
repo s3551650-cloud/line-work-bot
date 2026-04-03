@@ -425,11 +425,6 @@ def setup_richmenu():
         rich_menu = create_rich_menu()
         rich_menu_id = line_bot_api.create_rich_menu(rich_menu)
         
-        with open('richmenu.png', 'rb') as f:
-            line_bot_api.set_rich_menu_image(rich_menu_id, 'image/png', f)
-        
-        line_bot_api.set_default_rich_menu(rich_menu_id)
-        
         return jsonify({'status': 'ok', 'rich_menu_id': rich_menu_id})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
