@@ -429,5 +429,6 @@ def setup_richmenu():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 if __name__ == "__main__":
+    # 啟動 Flask 伺服器
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
