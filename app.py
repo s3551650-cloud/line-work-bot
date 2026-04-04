@@ -132,11 +132,20 @@ def check_and_send_reminders():
         return
     
     now = get_taiwan_time()
+    today = now.strftime('%Y-%m-%d')
     
     records = supabase_request('work_records', 
-                              filters={'early_remind_sent': 'eq.false'})
+                              filters={
+                                  'early_remind_sent': 'eq.false',
+                                  'check_in': f'gte.{today}T00:00:00',
+                                  'order': 'created_at.desc',
+                                  'limit': 1
+                              })
     
-    for record in records or []:
+    if not records:
+        return
+    
+    for record in records:
         line_id = record.get('line_id')
         early_remind_time_str = record.get('early_remind_time')
         scheduled_check_out_str = record.get('scheduled_check_out')
@@ -148,7 +157,7 @@ def check_and_send_reminders():
         
         if early_remind_time_str and not early_remind_sent:
             try:
-                early_remind_time = datetime.fromisoformat(early_remind_time_str.replace('Z', '+00:00'))
+                early_remind_time = datetime.fromisoformat(early_remind_time_str.replace('Z', '+00:00').replace('+00:00', ''))
             except:
                 early_remind_time = None
             
@@ -172,7 +181,7 @@ def check_and_send_reminders():
         
         if scheduled_check_out_str and not main_remind_sent:
             try:
-                scheduled_check_out = datetime.fromisoformat(scheduled_check_out_str.replace('Z', '+00:00'))
+                scheduled_check_out = datetime.fromisoformat(scheduled_check_out_str.replace('Z', '+00:00').replace('+00:00', ''))
             except:
                 scheduled_check_out = None
             
