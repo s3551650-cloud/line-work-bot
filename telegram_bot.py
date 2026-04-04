@@ -186,6 +186,7 @@ def check_and_send_reminders():
         scheduled_check_out_str = record.get('scheduled_check_out')
         early_remind_sent = record.get('early_remind_sent', False)
         main_remind_sent = record.get('main_remind_sent', False)
+        is_test = record.get('is_test', False)
         
         if early_remind_time_str and not early_remind_sent:
             try:
@@ -199,7 +200,10 @@ def check_and_send_reminders():
                 if user:
                     remind_minutes = user.get('remind_minutes', 10)
                 
-                message = f"⏰ *提前 {remind_minutes} 分鐘提醒*\n\n您的下班時間快到了！"
+                if is_test:
+                    message = f"🧪 *測試提醒*\n\n這是測試訊息，您的下班時間快到了！"
+                else:
+                    message = f"⏰ *提前 {remind_minutes} 分鐘提醒*\n\n您的下班時間快到了！"
                 send_message(chat_id, message)
                 
                 supabase_request('telegram_work_records', method='PATCH',
@@ -215,7 +219,10 @@ def check_and_send_reminders():
                 scheduled_check_out = None
             
             if scheduled_check_out and now >= scheduled_check_out:
-                message = f"🎉 *下班時間到了！*\n\n辛苦您了，可以下班了！"
+                if is_test:
+                    message = f"🧪 *測試提醒*\n\n這是測試訊息，下班時間到了！"
+                else:
+                    message = f"🎉 *下班時間到了！*\n\n辛苦您了，可以下班了！"
                 send_message(chat_id, message)
                 
                 supabase_request('telegram_work_records', method='PATCH',
@@ -415,11 +422,29 @@ def telegram_webhook():
         send_message(chat_id, message_text, get_main_keyboard())
     
     elif text == '測試':
-        result = record_check_in(user_id, chat_id)
-        if result:
-            message_text = f"✅ *測試打卡成功！*\n\n"
-            message_text += f"上班時間：{get_taiwan_time().strftime('%H:%M:%S')}\n"
-            message_text += f"⏰ 10秒後會收到提醒！"
+        user = get_or_create_user(user_id)
+        if user:
+            check_in = get_taiwan_time()
+            scheduled_check_out = check_in + timedelta(seconds=10)
+            
+            record_data = {
+                'user_id': user['id'],
+                'telegram_id': user_id,
+                'chat_id': str(chat_id),
+                'check_in': check_in.isoformat(),
+                'scheduled_check_out': scheduled_check_out.isoformat(),
+                'early_remind_time': None,
+                'early_remind_type': None,
+                'early_remind_sent': True,
+                'main_remind_sent': False,
+                'is_test': True
+            }
+            
+            supabase_request('telegram_work_records', method='POST', data=record_data)
+            
+            message_text = f"🧪 *測試打卡成功！*\n\n"
+            message_text += f"測試時間：{check_in.strftime('%H:%M:%S')}\n"
+            message_text += f"⏰ 10秒後會收到下班提醒！"
         else:
             message_text = "❌ 測試失敗"
         
