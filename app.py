@@ -151,6 +151,7 @@ def check_and_send_reminders():
         scheduled_check_out_str = record.get('scheduled_check_out')
         early_remind_sent = record.get('early_remind_sent', False)
         main_remind_sent = record.get('main_remind_sent', False)
+        is_test = record.get('is_test', False)
         
         if not line_id:
             continue
@@ -167,7 +168,10 @@ def check_and_send_reminders():
                 if user:
                     remind_min = user.get('remind_minutes', 10)
                 
-                message = f"提前 {remind_min} 分鐘提醒：\n您的下班時間快到了！"
+                if is_test:
+                    message = f"🧪 測試提醒\n\n這是測試訊息，您的下班時間快到了！"
+                else:
+                    message = f"提前 {remind_min} 分鐘提醒：\n您的下班時間快到了！"
                 try:
                     line_bot_api.push_message(line_id, TextSendMessage(text=message))
                     
@@ -186,7 +190,10 @@ def check_and_send_reminders():
                 scheduled_check_out = None
             
             if scheduled_check_out and now >= scheduled_check_out:
-                message = f"下班時間到了！\n辛苦您了，可以下班了！"
+                if is_test:
+                    message = f"🧪 測試提醒\n\n這是測試訊息，下班時間到了！"
+                else:
+                    message = f"下班時間到了！\n辛苦您了，可以下班了！"
                 try:
                     line_bot_api.push_message(line_id, TextSendMessage(text=message))
                     
@@ -437,14 +444,15 @@ def handle_message(event):
                 'scheduled_check_out': scheduled_check_out.isoformat(),
                 'early_remind_time': None,
                 'early_remind_sent': True,
-                'main_remind_sent': False
+                'main_remind_sent': False,
+                'is_test': True
             }
             
             supabase_request('work_records', method='POST', data=record_data)
             
-            message = f"測試打卡成功！\n\n上班時間：{check_in.strftime('%H:%M:%S')}\n預定下班時間：{scheduled_check_out.strftime('%H:%M:%S')}\n\n10秒後會收到提醒！"
+            message = f"🧪 測試打卡成功！\n\n測試時間：{check_in.strftime('%H:%M:%S')}\n⏰ 10秒後會收到下班提醒！"
         else:
-            message = "測試打卡失敗"
+            message = "❌ 測試打卡失敗"
         
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=message))
     
