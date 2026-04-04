@@ -163,34 +163,41 @@ def check_and_send_reminders():
         return
     
     now = get_taiwan_time()
+    today = now.strftime('%Y-%m-%d')
     
     records = supabase_request('telegram_work_records', 
-                              filters={'early_remind_sent': 'eq.false'})
+                              filters={
+                                  'early_remind_sent': 'eq.false',
+                                  'check_in': f'gte.{today}T00:00:00',
+                                  'order': 'created_at.desc',
+                                  'limit': 1
+                              })
     
-    for record in records or []:
+    if not records:
+        return
+    
+    for record in records:
         chat_id = record.get('chat_id')
+        
+        if not chat_id:
+            continue
+        
         early_remind_time_str = record.get('early_remind_time')
         scheduled_check_out_str = record.get('scheduled_check_out')
         early_remind_sent = record.get('early_remind_sent', False)
         main_remind_sent = record.get('main_remind_sent', False)
         
-        if not chat_id:
-            continue
-        
         if early_remind_time_str and not early_remind_sent:
             try:
-                early_remind_time = datetime.fromisoformat(early_remind_time_str.replace('Z', '+00:00'))
+                early_remind_time = datetime.fromisoformat(early_remind_time_str.replace('Z', '+00:00').replace('+00:00', ''))
             except:
                 early_remind_time = None
             
             if early_remind_time and now >= early_remind_time:
-                try:
-                    remind_minutes = 10
-                    user = get_or_create_user(record.get('telegram_id', ''))
-                    if user:
-                        remind_minutes = user.get('remind_minutes', 10)
-                except:
-                    remind_minutes = 10
+                remind_minutes = 10
+                user = get_or_create_user(record.get('telegram_id', ''))
+                if user:
+                    remind_minutes = user.get('remind_minutes', 10)
                 
                 message = f"⏰ *提前 {remind_minutes} 分鐘提醒*\n\n您的下班時間快到了！"
                 send_message(chat_id, message)
@@ -203,7 +210,7 @@ def check_and_send_reminders():
         
         if scheduled_check_out_str and not main_remind_sent:
             try:
-                scheduled_check_out = datetime.fromisoformat(scheduled_check_out_str.replace('Z', '+00:00'))
+                scheduled_check_out = datetime.fromisoformat(scheduled_check_out_str.replace('Z', '+00:00').replace('+00:00', ''))
             except:
                 scheduled_check_out = None
             

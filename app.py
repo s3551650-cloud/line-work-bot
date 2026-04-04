@@ -415,15 +415,6 @@ def handle_message(event):
         
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=message))
     
-    elif text in ['測試', 'test']:
-        result = record_check_in(line_id)
-        if result:
-            message = f"測試打卡成功！\n\n上班時間：{get_taiwan_time().strftime('%H:%M:%S')}\n預定下班時間：{result['scheduled_check_out'].strftime('%H:%M:%S')}\n（10秒後會收到提醒！）"
-        else:
-            message = "測試打卡失敗"
-        
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=message))
-    
     elif text in ['歷史', '記錄', '查詢']:
         records = get_user_history(line_id, 10)
         message = format_history_message(records)
