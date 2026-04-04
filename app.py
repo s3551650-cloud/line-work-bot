@@ -425,9 +425,24 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=message))
     
     elif text == '測試':
-        result = record_check_in(line_id)
-        if result:
-            message = f"測試打卡成功！\n\n上班時間：{get_taiwan_time().strftime('%H:%M:%S')}\n預定下班時間：{result['scheduled_check_out'].strftime('%H:%M:%S')}\n\n系統會在下班時間提醒您！"
+        user = get_or_create_user(line_id)
+        if user:
+            check_in = get_taiwan_time()
+            scheduled_check_out = check_in + timedelta(seconds=10)
+            
+            record_data = {
+                'user_id': user['id'],
+                'line_id': line_id,
+                'check_in': check_in.isoformat(),
+                'scheduled_check_out': scheduled_check_out.isoformat(),
+                'early_remind_time': None,
+                'early_remind_sent': True,
+                'main_remind_sent': False
+            }
+            
+            supabase_request('work_records', method='POST', data=record_data)
+            
+            message = f"測試打卡成功！\n\n上班時間：{check_in.strftime('%H:%M:%S')}\n預定下班時間：{scheduled_check_out.strftime('%H:%M:%S')}\n\n10秒後會收到提醒！"
         else:
             message = "測試打卡失敗"
         
